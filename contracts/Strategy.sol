@@ -10,12 +10,30 @@ import {BaseStrategy, StrategyParams} from "@badger/contracts/BaseStrategy.sol";
 import {SafeERC20, SafeMath, IERC20, Address} from "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 
 // Import interfaces for many popular DeFi projects, or add your own!
-//import "../interfaces/<protocol>/<Interface>.sol";
+import "../interfaces/uniswap/IUniswapRouterV2.sol";
+import "../interfaces/uniswap/IStakingRewards.sol";
+
+
 
 contract Strategy is BaseStrategy {
     using SafeERC20 for IERC20;
     using Address for address;
     using SafeMath for uint256;
+    
+
+    address public constant reward = 0x831753DD7087CaC61aB5644b308642cc1c33Dc13; // Quick
+
+    address public constant STAKING_REWARDS = 0x8f2ac4EC8982bF1699a6EeD696e204FA2ccD5D91;
+    address public constant QUICKSWAP_ROUTER = 0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff;
+
+    address public constant wbtc = 0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6;
+    address public constant usdc = 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174;
+    address public constant weth = 0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619;
+
+    // slippage tolerance 0.5% (divide by 1000) 
+    uint256 public sl = 5;
+
+    event Debug(string name, uint256 value);
 
     function initialize(
         address _vault,
@@ -32,19 +50,40 @@ contract Strategy is BaseStrategy {
         // debtThreshold = 0;
 
         // Do one-off approvals here
+        IERC20(want).safeApprove(STAKING_REWARDS, type(uint256).max);
+        IERC20(wbtc).safeApprove(STAKING_REWARDS, type(uint256).max);
+        IERC20(usdc).safeApprove(STAKING_REWARDS, type(uint256).max);
+
+        IERC20(reward).safeApprove(QUICKSWAP_ROUTER, type(uint256).max);
+        IERC20(weth).safeApprove(QUICKSWAP_ROUTER, type(uint256).max);
+        IERC20(wbtc).safeApprove(QUICKSWAP_ROUTER, type(uint256).max);
+        IERC20(usdc).safeApprove(QUICKSWAP_ROUTER, type(uint256).max);
     }
 
     // ******** OVERRIDE THESE METHODS FROM BASE CONTRACT ************
 
     function name() external view override returns (string memory) {
         // Add your own name here, suggestion e.g. "StrategyCreamYFI"
-        return "Strategy<ProtocolName><TokenType>";
+        return "QUICKSWAP WBTC-USDC Farming";
+    }
+
+    function balanceOfPool() public view returns (uint256) {
+        return IStakingRewards(STAKING_REWARDS).balanceOf(address(this));
+    }
+
+    function balanceOfWant() public view returns (uint256) {
+        return IERC20(want).balanceOf(address(this));
     }
 
     function estimatedTotalAssets() public view override returns (uint256) {
-        // TODO: Build a more accurate estimate using the value of all positions in terms of `want`
-        return want.balanceOf(address(this));
+        // Sum of want + staked
+        return balanceOfWant().add(balanceOfPool());
     }
+
+    function checkPendingReward() public view returns (uint256) {
+        return IStakingRewards(STAKING_REWARDS).earned(address(this));
+    }
+
 
     function prepareReturn(uint256 _debtOutstanding)
         internal
@@ -60,14 +99,42 @@ contract Strategy is BaseStrategy {
         // NOTE: Should try to free up at least `_debtOutstanding` of underlying position
         // This would be the old harvest, where you just report _profit, _loss and _debtPayment
 
-        // NOTE: This is here just for tests to pass (so strat repays all it owes at all times)
+        uint256 _before = IERC20(want).balanceOf(address(this));
+
+        uint256 _reward = checkPendingReward();
+
+        if (_reward > 0) {
+            IStakingRewards(STAKING_REWARDS).getReward();
+            _quickToLP();
+            _profit = IERC20(want).balanceOf(address(this)).sub(_before);
+        }
+
+
         _debtPayment = _debtOutstanding;
+
+        if(_debtPayment > 0){
+            IStakingRewards(STAKING_REWARDS).withdraw(_debtPayment);
+        }
+        emit Debug("_debtOutstanding", _debtOutstanding);
+        emit Debug("_profit", _profit);
+        emit Debug("_loss", _loss);
+        emit Debug("_debtPayment", _debtPayment);
+        return (_profit, _loss, _debtPayment);
     }
 
     function adjustPosition(uint256 _debtOutstanding) internal override {
         // TODO: Do something to invest excess `want` tokens (from the Vault) into your positions
         // NOTE: Try to adjust positions so that `_debtOutstanding` can be freed up on *next* harvest (not immediately)
         // This is tend, not much to change here
+        uint256 balance = IERC20(want).balanceOf(address(this));
+        if(balance > _debtOutstanding){
+            IStakingRewards(STAKING_REWARDS).stake(balance.sub(_debtOutstanding));
+        }
+
+        if(_debtOutstanding > balance){
+            // We need to withdraw
+            IStakingRewards(STAKING_REWARDS).withdraw(_debtOutstanding.sub(balance));
+        }
     }
 
     function liquidatePosition(uint256 _amountNeeded)
@@ -79,7 +146,14 @@ contract Strategy is BaseStrategy {
         // NOTE: Maintain invariant `want.balanceOf(this) >= _liquidatedAmount`
         // NOTE: Maintain invariant `_liquidatedAmount + _loss <= _amountNeeded`
 
-        //This is basically withdrawSome
+        if(_amountNeeded > balanceOfWant()) {
+            uint256 toWithdraw = _amountNeeded.sub(balanceOfWant());
+            if(toWithdraw > balanceOfPool()){
+                toWithdraw = balanceOfPool();
+            }
+            IStakingRewards(STAKING_REWARDS).withdraw(toWithdraw);
+        }
+
 
         uint256 totalAssets = want.balanceOf(address(this));
         if (_amountNeeded > totalAssets) {
@@ -92,6 +166,10 @@ contract Strategy is BaseStrategy {
 
     function liquidateAllPositions() internal override returns (uint256) {
         // This is a generalization of withdrawAll that withdraws everything for the entire strat
+        uint256 _totalWant = balanceOfPool();
+        if (_totalWant > 0) {
+            IStakingRewards(STAKING_REWARDS).withdraw(_totalWant);
+        }
 
         // TODO: Liquidate all positions and return the amount freed.
         return want.balanceOf(address(this));
@@ -103,6 +181,8 @@ contract Strategy is BaseStrategy {
         // TODO: Transfer any non-`want` tokens to the new strategy
         // NOTE: `migrate` will automatically forward all `want` in this strategy to the new one
         // This is gone if we use upgradeable
+        prepareReturn(0); // Harvest cause why not
+        liquidateAllPositions(); // In this case, we can just withdraw all and we'll be good
     }
 
     // Override this to add all tokens/tokenized positions this contract manages
@@ -119,11 +199,17 @@ contract Strategy is BaseStrategy {
     //      return protected;
     //    }
     function protectedTokens()
-        internal
+        public
         view
         override
         returns (address[] memory)
-    {}
+    {
+        address[] memory protected = new address[](4);
+        protected[0] = STAKING_REWARDS;
+        protected[1] = reward;
+        protected[2] = wbtc;
+        protected[3] = usdc;
+    }
 
     /**
      * @notice
@@ -148,5 +234,33 @@ contract Strategy is BaseStrategy {
     {
         // TODO create an accurate price oracle
         return _amtInWei;
+    }
+
+    /// @dev QUICK TO WBTC-USDC LP 
+    function _quickToLP() internal {
+        uint256 _tokens = IERC20(reward).balanceOf(address(this));
+        uint256 _half = _tokens.mul(500).div(1000);
+
+        // quick to weth to wbtc
+        address[] memory path = new address[](3);
+        path[0] = reward;
+        path[1] = weth;
+        path[2] = wbtc;
+        IUniswapRouterV2(QUICKSWAP_ROUTER).swapExactTokensForTokens(_half, 0, path, address(this), now);
+
+        // quick to usdc
+        path = new address[](2);
+        path[0] = reward;
+        path[1] = usdc;
+        IUniswapRouterV2(QUICKSWAP_ROUTER).swapExactTokensForTokens(_tokens.sub(_half), 0, path, address(this), now);
+
+        uint256 _wbtcIn = IERC20(wbtc).balanceOf(address(this));
+        uint256 _usdcIn = IERC20(usdc).balanceOf(address(this));
+        // add to WBTC-USDC LP pool for pool tokens
+        IUniswapRouterV2(QUICKSWAP_ROUTER).addLiquidity(wbtc, usdc, _wbtcIn, _usdcIn, _wbtcIn.mul(sl).div(1000), _usdcIn.mul(sl).div(1000), address(this), now);
+    }   
+ 
+    function setSlippageTolerance(uint256 _s) external onlyAuthorized {
+        sl = _s;
     }
 }

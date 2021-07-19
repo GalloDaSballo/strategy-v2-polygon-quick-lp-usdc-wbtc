@@ -83,6 +83,21 @@ class StrategyCoreResolver:
                 [["strategy.estimatedTotalAssets", as_wei]],
             )
         )
+
+        calls.append(
+            Call(
+                strategy.address,
+                [func.strategy.balanceOfWant],
+                [["strategy.balanceOfWant", as_wei]],
+            )
+        )
+        calls.append(
+            Call(
+                strategy.address,
+                [func.strategy.balanceOfPool],
+                [["strategy.balanceOfPool", as_wei]],
+            )
+        )
         ## TODO: Find a way to have performance fee in here too
         # calls.append(
         #     Call(

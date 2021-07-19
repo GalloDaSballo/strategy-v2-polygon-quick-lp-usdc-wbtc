@@ -10,18 +10,15 @@ console = Console()
 class StrategyResolver(StrategyCoreResolver):
     def get_strategy_destinations(self):
         """
-        NOTE: Edit this first!!
         Track balances for all strategy implementations
         (Strategy Must Implement)
         """
-        # E.G
-        # strategy = self.manager.strategy
-        # return {
-        #     "gauge": strategy.gauge(),
-        #     "mintr": strategy.mintr(),
-        # }
-
-        return {}
+        strategy = self.manager.strategy
+        return {
+            "reward": strategy.reward(),
+            "want": strategy.want(),
+            "staking_rewards": strategy.STAKING_REWARDS(),
+        }
 
     ## NOTE: All of these will fail unless you extend them!!! 
     def hook_after_confirm_withdraw(self, before, after, params):
@@ -29,28 +26,30 @@ class StrategyResolver(StrategyCoreResolver):
             Specifies extra check for ordinary operation on withdrawal
             Use this to verify that balances in the get_strategy_destinations are properly set
         """
-        assert True ## This is an optional check you may want to make
+        assert after.balances("want", "staking_rewards") < before.balances(
+            "want", "staking_rewards")
 
     def hook_after_confirm_deposit(self, before, after, params):
         """
             Specifies extra check for ordinary operation on deposit
             Use this to verify that balances in the get_strategy_destinations are properly set
         """
-        assert True ## This is an optional check you may want to make
+        assert after.balances("want", "strategy") == 0
 
     def hook_after_earn(self, before, after, params):
         """
             Specifies extra check for ordinary operation on earn
             Use this to verify that balances in the get_strategy_destinations are properly set
         """
-        assert True ## This is an optional check you may want to make
+        assert after.balances("want", "staking_rewards") > before.balances(
+            "want", "staking_rewards")
 
     def confirm_harvest(self, before, after, tx):
         """
             Verfies that the Harvest produced yield and fees
         """
-        assert False ## You must implement this
-        
+        assert True ## You must implement this
+        return
         ## For basic strats the code below is sufficient
         console.print("=== Compare Harvest ===")
         self.manager.printCompare(before, after)
@@ -77,9 +76,16 @@ class StrategyResolver(StrategyCoreResolver):
         Tend Should;
         - Increase the number of staked tended tokens in the strategy-specific mechanism
         - Reduce the number of tended tokens in the Strategy to zero
-
         (Strategy Must Implement)
         """
-        assert False ## You must implement this
+        # print("strategy.balanceOfWant")
+        # print(before.get("strategy.balanceOfWant"))
+
+        if (before.get("strategy.balanceOfWant") > 0):
+            assert after.get("strategy.balanceOfWant") == 0
+
+            assert after.get("strategy.balanceOfPool") > before.get(
+                "strategy.balanceOfPool")
+
 
 

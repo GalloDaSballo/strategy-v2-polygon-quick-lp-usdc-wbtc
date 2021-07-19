@@ -80,24 +80,17 @@ def test_emergency_exit(
     chain.sleep(3600 * 24 * 1) ## Sleep 1 day
     chain.mine(1)
     
-    print("Reward") 
-    print(incentivesController.getRewardsBalance(
-            [lpComponent, borrowed],
-            strategy
-        ))
     print("stratDep2 ")
     print(strategy.estimatedTotalAssets())
 
     # Harvest 2: Realize profit
     strategy.harvest()
     print("Reward 2") 
-    print(incentivesController.getRewardsBalance(
-            [lpComponent, borrowed],
-            strategy
-        ))
+
     print("stratDep3 ")
     print(strategy.estimatedTotalAssets())
-    amountAfterHarvest = token.balanceOf(strategy) + lpComponent.balanceOf(strategy) - borrowed.balanceOf(strategy)
+    amountAfterHarvest = strategy.balanceOfPool() + strategy.balanceOfWant()
+    
     chain.sleep(3600 * 6)  # 6 hrs needed for profits to unlock
     chain.mine(1)
     profit = token.balanceOf(vault.address)  # Profits go to vault
