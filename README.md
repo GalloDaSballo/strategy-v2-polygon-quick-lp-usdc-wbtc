@@ -1,5 +1,5 @@
 # Badger Vaults Brownie Mix (V2)
-
+# WARNING: Code not audited, code not polished, code not documented, tests are not passing. Use at your own risk
 ## TODO:
 - Use Scripts from Vaults Code, rather than copy pasting
 - Write Scripts to add to registry
